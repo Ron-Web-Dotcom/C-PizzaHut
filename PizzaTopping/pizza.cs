@@ -33,9 +33,12 @@ class Pizza : ToppingCombination
             .Take(topN)
             .ToList();
 
+        // Fix 3: single helper removes the repeated (r.toppingss ?? "").TrimStart(',') expression
+        string CleanToppings(ToppingCombination r) => (r.toppingss ?? "").TrimStart(',');
+
         // Print table-style output with dynamic column widths
         int rankWidth     = Math.Max(4, results.Count.ToString().Length);
-        int toppingsWidth = results.Count > 0 ? Math.Max(8, results.Max(r => (r.toppingss ?? "").TrimStart(',').Length)) : 8;
+        int toppingsWidth = results.Count > 0 ? Math.Max(8, results.Max(r => CleanToppings(r).Length)) : 8;
         int ordersWidth   = results.Count > 0 ? Math.Max(6, results.Max(r => r.countt.ToString().Length)) : 6;
 
         string separator = new string('-', rankWidth + 2 + toppingsWidth + 2 + ordersWidth);
@@ -45,8 +48,7 @@ class Pizza : ToppingCombination
         int num = 1;
         foreach (ToppingCombination taste in results)
         {
-            string toppingDisplay = (taste.toppingss ?? "").TrimStart(',');
-            Console.WriteLine($"{num.ToString().PadLeft(rankWidth)}  {toppingDisplay.PadRight(toppingsWidth)}  {taste.countt.ToString().PadLeft(ordersWidth)}");
+            Console.WriteLine($"{num.ToString().PadLeft(rankWidth)}  {CleanToppings(taste).PadRight(toppingsWidth)}  {taste.countt.ToString().PadLeft(ordersWidth)}");
             num++;
         }
 
@@ -68,20 +70,15 @@ class Pizza : ToppingCombination
 
                 if (path != null)
                 {
-                    // Feature: local file input
-                    if (!File.Exists(path))
-                    {
-                        Console.Error.WriteLine($"Error: File not found: {path}");
-                        return null;
-                    }
+                    // Fix 2: removed File.Exists() TOCTOU check — FileNotFoundException is caught below
                     json = File.ReadAllText(path);
                 }
                 else
                 {
                     //Create a variable  to capture data from the link
-                    string url = customUrl ?? "http://brightway.com/CodeTests/pizzas.json";
+                    string fetchUrl = customUrl ?? "http://brightway.com/CodeTests/pizzas.json";
                     //Creating  the Request for the variable
-                    HttpWebRequest httpWebRequest = System.Net.WebRequest.Create(url) as HttpWebRequest;
+                    HttpWebRequest httpWebRequest = System.Net.WebRequest.Create(fetchUrl) as HttpWebRequest;
 
                     // When the request is sent  from the url variable and the check if the web request get called to
                     using (HttpWebResponse httpWebResponse = httpWebRequest.GetResponse() as HttpWebResponse)
@@ -92,9 +89,9 @@ class Pizza : ToppingCombination
                             Console.Error.WriteLine($"Error: Server returned {httpWebResponse.StatusCode} {httpWebResponse.StatusDescription}");
                             return null;
                         }
-                        //Creating an instance for the the request that is called it creates a smooth additional layer between layer and application
-                        Stream create = httpWebResponse.GetResponseStream();
-                        json = new StreamReader(create).ReadToEnd();
+                        // Fix 1: dispose StreamReader with using to avoid resource leak
+                        using (var reader = new StreamReader(httpWebResponse.GetResponseStream()))
+                            json = reader.ReadToEnd();
                     }
                 }
 
@@ -124,8 +121,8 @@ class Pizza : ToppingCombination
             //Create a variable using the datatype
             var Pizzahut = toppings.Select(pizza => pizza.toppings.Split(',').Select(t => t.Trim()).OrderBy(toppin => toppin));
 
-
-            IEnumerable<string> aggregated = Pizzahut.Select(sortedToppings => sortedToppings.Aggregate((pepper, sauces) => pepper + ',' + sauces));
+            // Fix 4: string.Join is the BCL standard for joining sequences — replaces Aggregate
+            IEnumerable<string> aggregated = Pizzahut.Select(sortedToppings => string.Join(",", sortedToppings));
 
             //DAta is Grouped and  Displayed
             IEnumerable<ToppingCombination> grouped = aggregated
@@ -144,13 +141,13 @@ class Pizza : ToppingCombination
         {
             try
             {
-                string ext = Path.GetExtension(path).ToLower();
-                if (ext == ".json")
+                // Fix 5: OrdinalIgnoreCase avoids allocating a lowercased string
+                if (Path.GetExtension(path).Equals(".json", StringComparison.OrdinalIgnoreCase))
                 {
                     var data = exportResults.Select((r, i) => new
                     {
                         Rank     = i + 1,
-                        Toppings = (r.toppingss ?? "").TrimStart(','),
+                        Toppings = CleanToppings(r),
                         Orders   = r.countt
                     });
                     File.WriteAllText(path, JsonConvert.SerializeObject(data, Formatting.Indented));
@@ -158,11 +155,8 @@ class Pizza : ToppingCombination
                 else
                 {
                     // Default: CSV
-                    var lines = new List<string> { "Rank,Toppings,Orders" };
-                    int rank = 1;
-                    foreach (var r in exportResults)
-                        lines.Add($"{rank++},\"{(r.toppingss ?? "").TrimStart(',')}\",{r.countt}");
-                    File.WriteAllText(path, string.Join(Environment.NewLine, lines));
+                    var csvRows = exportResults.Select((r, i) => $"{i + 1},\"{CleanToppings(r)}\",{r.countt}");
+                    File.WriteAllText(path, "Rank,Toppings,Orders" + Environment.NewLine + string.Join(Environment.NewLine, csvRows));
                 }
                 Console.WriteLine($"Results exported to: {path}");
             }
