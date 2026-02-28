@@ -35,7 +35,7 @@ class Pizza : ToppingCombination
         int num = 0;
         // Declare a variable  intianlize  by the number 
 
-        string letter = "PizzaTaken: {2} \t HowManyOrdered:{1,5}";
+        string letter = "Rank:{0} \t PizzaTaken: {2} \t HowManyOrdered:{1,5}";
         //This is my for loop
         foreach (ToppingCombination taste in mostPopularToppings)
         {
@@ -87,10 +87,10 @@ class Pizza : ToppingCombination
         {
 
             //Create a variable using the datatype 
-            var Pizzahut = toppings.Select(pizza => pizza.toppings.OrderBy(toppin => toppin));
+            var Pizzahut = toppings.Select(pizza => pizza.toppings.Split(',').Select(t => t.Trim()).OrderBy(toppin => toppin));
             
 
-            IEnumerable<string> aggregated = Pizzahut.Select(toppings => Pizzahut.Aggregate("", (pepper,sauces ) => pepper + ',' + sauces));
+            IEnumerable<string> aggregated = Pizzahut.Select(sortedToppings => sortedToppings.Aggregate("", (pepper, sauces) => pepper + ',' + sauces));
 
             //DAta is Grouped and  Displayed 
             IEnumerable<ToppingCombination> grouped = aggregated
