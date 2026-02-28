@@ -17,43 +17,69 @@ class Pizza : ToppingCombination
 
     }
 
-    public void PizzaTop(string filePath = null, string url = null, int topN = 15, int minOrders = 1, string exportPath = null)
+    public void PizzaTop(string filePath = null, string url = null, int topN = 15, int minOrders = 1,
+        string exportPath = null, string toppingFilter = null, int comboSize = 0,
+        bool sortAsc = false, string stdoutFormat = null, bool singles = false)
     {
 
         // Create Type list of Objects that can be accessed by index
         List<Pizza> toppings = GetPizza(filePath, url);
         // if the  object is  empty it will return
         if (toppings == null) return;
-        //The
-        IEnumerable<ToppingCombination> topcombination = GetTopCombo(toppings);
-        //The top toppings in Descending Order, filtered by minOrders, then take topN
+
+        // Choose analysis mode: individual toppings vs. combinations
+        IEnumerable<ToppingCombination> topcombination = singles ? GetSinglesCombo(toppings) : GetTopCombo(toppings);
+
+        // Normalise the filter once so comparisons are always lowercase
+        string normalizedFilter = toppingFilter?.Trim().ToLowerInvariant();
+
+        //The top toppings in Descending Order, filtered, then take topN
         List<ToppingCombination> results = topcombination
             .Where(tc => tc.countt >= minOrders)
-            .OrderByDescending(oi => oi.countt)
+            .Where(tc => normalizedFilter == null || tc.toppingss.Split(',').Contains(normalizedFilter))
+            .Where(tc => comboSize == 0 || tc.toppingss.Split(',').Length == comboSize)
+            .OrderBy(oi => sortAsc ? oi.countt : -oi.countt)
             .Take(topN)
             .ToList();
 
-        // Fix 3: single helper removes the repeated (r.toppingss ?? "").TrimStart(',') expression
         string CleanToppings(ToppingCombination r) => (r.toppingss ?? "").TrimStart(',');
 
-        // Print table-style output with dynamic column widths
-        int rankWidth     = Math.Max(4, results.Count.ToString().Length);
-        int toppingsWidth = results.Count > 0 ? Math.Max(8, results.Max(r => CleanToppings(r).Length)) : 8;
-        int ordersWidth   = results.Count > 0 ? Math.Max(6, results.Max(r => r.countt.ToString().Length)) : 6;
-
-        string separator = new string('-', rankWidth + 2 + toppingsWidth + 2 + ordersWidth);
-        Console.WriteLine($"{"Rank".PadLeft(rankWidth)}  {"Toppings".PadRight(toppingsWidth)}  {"Orders".PadLeft(ordersWidth)}");
-        Console.WriteLine(separator);
-
-        int num = 1;
-        foreach (ToppingCombination taste in results)
+        if (stdoutFormat != null)
         {
-            Console.WriteLine($"{num.ToString().PadLeft(rankWidth)}  {CleanToppings(taste).PadRight(toppingsWidth)}  {taste.countt.ToString().PadLeft(ordersWidth)}");
-            num++;
+            // Structured stdout output — clean for piping into other tools
+            if (stdoutFormat == "json")
+            {
+                var data = results.Select((r, i) => new { Rank = i + 1, Toppings = CleanToppings(r), Orders = r.countt });
+                Console.WriteLine(JsonConvert.SerializeObject(data, Formatting.Indented));
+            }
+            else if (stdoutFormat == "csv")
+            {
+                var csvRows = results.Select((r, i) => $"{i + 1},\"{CleanToppings(r)}\",{r.countt}");
+                Console.WriteLine("Rank,Toppings,Orders");
+                Console.WriteLine(string.Join(Environment.NewLine, csvRows));
+            }
         }
+        else
+        {
+            // Print table-style output with dynamic column widths
+            int rankWidth     = Math.Max(4, results.Count.ToString().Length);
+            int toppingsWidth = results.Count > 0 ? Math.Max(8, results.Max(r => CleanToppings(r).Length)) : 8;
+            int ordersWidth   = results.Count > 0 ? Math.Max(6, results.Max(r => r.countt.ToString().Length)) : 6;
 
-        if (results.Count == 0)
-            Console.WriteLine("No combinations match the specified filters.");
+            string separator = new string('-', rankWidth + 2 + toppingsWidth + 2 + ordersWidth);
+            Console.WriteLine($"{"Rank".PadLeft(rankWidth)}  {"Toppings".PadRight(toppingsWidth)}  {"Orders".PadLeft(ordersWidth)}");
+            Console.WriteLine(separator);
+
+            int num = 1;
+            foreach (ToppingCombination taste in results)
+            {
+                Console.WriteLine($"{num.ToString().PadLeft(rankWidth)}  {CleanToppings(taste).PadRight(toppingsWidth)}  {taste.countt.ToString().PadLeft(ordersWidth)}");
+                num++;
+            }
+
+            if (results.Count == 0)
+                Console.WriteLine("No combinations match the specified filters.");
+        }
 
         // Export results if requested
         if (exportPath != null)
@@ -70,7 +96,7 @@ class Pizza : ToppingCombination
 
                 if (path != null)
                 {
-                    // Fix 2: removed File.Exists() TOCTOU check — FileNotFoundException is caught below
+                    // FileNotFoundException is caught below — no pre-check needed
                     json = File.ReadAllText(path);
                 }
                 else
@@ -89,7 +115,6 @@ class Pizza : ToppingCombination
                             Console.Error.WriteLine($"Error: Server returned {httpWebResponse.StatusCode} {httpWebResponse.StatusDescription}");
                             return null;
                         }
-                        // Fix 1: dispose StreamReader with using to avoid resource leak
                         using (var reader = new StreamReader(httpWebResponse.GetResponseStream()))
                             json = reader.ReadToEnd();
                     }
@@ -114,12 +139,28 @@ class Pizza : ToppingCombination
             }
         }
 
-        // This help to  get current elements from the collection
-        IEnumerable<ToppingCombination> GetTopCombo(List<Pizza> toppings)
+        // Rank individual toppings by frequency
+        IEnumerable<ToppingCombination> GetSinglesCombo(List<Pizza> pizzaList)
         {
+            return pizzaList
+                .Where(pizza => pizza.toppings != null)
+                .SelectMany(pizza => pizza.toppings.Split(',')
+                    .Select(t => t.Trim().ToLowerInvariant())
+                    .Where(t => !string.IsNullOrEmpty(t)))
+                .GroupBy(t => t)
+                .Select(g => new ToppingCombination { toppingss = g.Key, countt = g.Count() });
+        }
 
-            //Create a variable using the datatype
-            var Pizzahut = toppings.Select(pizza => pizza.toppings.Split(',').Select(t => t.Trim()).OrderBy(toppin => toppin));
+        // This help to  get current elements from the collection
+        IEnumerable<ToppingCombination> GetTopCombo(List<Pizza> pizzaList)
+        {
+            //Create a variable using the datatype — normalise case so "Bacon" and "bacon" group together
+            var Pizzahut = pizzaList
+                .Where(pizza => pizza.toppings != null)
+                .Select(pizza => pizza.toppings.Split(',')
+                    .Select(t => t.Trim().ToLowerInvariant())
+                    .Where(t => !string.IsNullOrEmpty(t))
+                    .OrderBy(t => t));
 
             // Fix 4: string.Join is the BCL standard for joining sequences — replaces Aggregate
             IEnumerable<string> aggregated = Pizzahut.Select(sortedToppings => string.Join(",", sortedToppings));
@@ -127,11 +168,11 @@ class Pizza : ToppingCombination
             //DAta is Grouped and  Displayed
             IEnumerable<ToppingCombination> grouped = aggregated
                .GroupBy(toppingsGroup => toppingsGroup)
-            .Select(toppingsGroup => new ToppingCombination()
-            {
-                toppingss = toppingsGroup.Key,
-                countt = toppingsGroup.Count()
-            });
+               .Select(toppingsGroup => new ToppingCombination()
+               {
+                   toppingss = toppingsGroup.Key,
+                   countt = toppingsGroup.Count()
+               });
             return grouped;
 
         }
