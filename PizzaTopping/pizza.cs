@@ -17,11 +17,11 @@ class Pizza : ToppingCombination
 
     }
 
-    public void PizzaTop(string filePath = null, int topN = 15, int minOrders = 1, string exportPath = null)
+    public void PizzaTop(string filePath = null, string url = null, int topN = 15, int minOrders = 1, string exportPath = null)
     {
 
         // Create Type list of Objects that can be accessed by index
-        List<Pizza> toppings = GetPizza(filePath);
+        List<Pizza> toppings = GetPizza(filePath, url);
         // if the  object is  empty it will return
         if (toppings == null) return;
         //The
@@ -60,7 +60,7 @@ class Pizza : ToppingCombination
 
 
         // This help to  get current elements from the collection
-        List<Pizza> GetPizza(string path)
+        List<Pizza> GetPizza(string path, string customUrl)
         {
             try
             {
@@ -79,7 +79,7 @@ class Pizza : ToppingCombination
                 else
                 {
                     //Create a variable  to capture data from the link
-                    string url = "http://brightway.com/CodeTests/pizzas.json";
+                    string url = customUrl ?? "http://brightway.com/CodeTests/pizzas.json";
                     //Creating  the Request for the variable
                     HttpWebRequest httpWebRequest = System.Net.WebRequest.Create(url) as HttpWebRequest;
 
@@ -125,7 +125,7 @@ class Pizza : ToppingCombination
             var Pizzahut = toppings.Select(pizza => pizza.toppings.Split(',').Select(t => t.Trim()).OrderBy(toppin => toppin));
 
 
-            IEnumerable<string> aggregated = Pizzahut.Select(sortedToppings => sortedToppings.Aggregate("", (pepper, sauces) => pepper + ',' + sauces));
+            IEnumerable<string> aggregated = Pizzahut.Select(sortedToppings => sortedToppings.Aggregate((pepper, sauces) => pepper + ',' + sauces));
 
             //DAta is Grouped and  Displayed
             IEnumerable<ToppingCombination> grouped = aggregated
