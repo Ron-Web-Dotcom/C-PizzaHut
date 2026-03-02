@@ -27,6 +27,11 @@ namespace PizzaTopping
             bool   stats          = false;
             int    minComboSize   = 0;
             int    maxComboSize   = 0;
+            bool   showPercent    = false;
+            string coOccurrence   = null;
+            int    offset         = 0;
+            bool   noHeader       = false;
+            bool   verbose        = false;
 
             for (int i = 0; i < args.Length; i++)
             {
@@ -77,29 +82,52 @@ namespace PizzaTopping
                     case "--stats":
                         stats = true;
                         break;
+                    case "--percent":
+                        showPercent = true;
+                        break;
+                    case "--co-occurrence":
+                        if (i + 1 < args.Length) coOccurrence = args[++i];
+                        break;
+                    case "--offset":
+                        if (i + 1 < args.Length && int.TryParse(args[++i], out int off)) offset = off;
+                        break;
+                    case "--no-header":
+                        noHeader = true;
+                        break;
+                    case "--verbose":
+                        verbose = true;
+                        break;
                     case "--help":
                         Console.WriteLine("Usage: PizzaTopping [options]");
                         Console.WriteLine();
                         Console.WriteLine("Data source:");
-                        Console.WriteLine("  --file <path>          Read pizza data from a local JSON file");
-                        Console.WriteLine("  --url <url>            Fetch pizza data from a custom URL");
+                        Console.WriteLine("  --file <path>             Read pizza data from a local JSON file");
+                        Console.WriteLine("  --url <url>               Fetch pizza data from a custom URL");
+                        Console.WriteLine();
+                        Console.WriteLine("Analysis mode (pick one):");
+                        Console.WriteLine("  --singles                 Rank individual toppings by frequency");
+                        Console.WriteLine("  --co-occurrence <topping> Rank toppings that appear most often alongside <topping>");
+                        Console.WriteLine("  (default)                 Rank topping combinations by frequency");
                         Console.WriteLine();
                         Console.WriteLine("Output control:");
-                        Console.WriteLine("  --top <n>              Show top N combinations (default: 15)");
-                        Console.WriteLine("  --sort asc|desc        Sort order — asc = least popular first (default: desc)");
-                        Console.WriteLine("  --stdout json|csv      Write results as JSON or CSV to stdout instead of a table");
-                        Console.WriteLine("  --export <file>        Export results to a .csv or .json file");
-                        Console.WriteLine("  --stats                Print dataset statistics after the results");
-                        Console.WriteLine("  --singles              Rank individual toppings by frequency instead of combos");
+                        Console.WriteLine("  --top <n>                 Show top N results (default: 15)");
+                        Console.WriteLine("  --offset <n>              Skip first N results — for pagination with --top");
+                        Console.WriteLine("  --sort asc|desc           Sort order — asc = least popular first (default: desc)");
+                        Console.WriteLine("  --percent                 Add a % column showing share of total orders");
+                        Console.WriteLine("  --no-header               Suppress header row and separator line");
+                        Console.WriteLine("  --verbose                 Print data source, record count, and active filters");
+                        Console.WriteLine("  --stdout json|csv         Write results as JSON or CSV to stdout instead of a table");
+                        Console.WriteLine("  --export <file>           Export results to a .csv or .json file");
+                        Console.WriteLine("  --stats                   Print dataset statistics after the results");
                         Console.WriteLine();
                         Console.WriteLine("Filters:");
-                        Console.WriteLine("  --min-orders <n>       Only show combos ordered at least N times (default: 1)");
-                        Console.WriteLine("  --topping <name>       Only show combos that contain an exact topping name");
-                        Console.WriteLine("  --exclude-topping <n>  Exclude combos that contain a specific topping");
-                        Console.WriteLine("  --search <text>        Only show combos where any topping contains the text");
-                        Console.WriteLine("  --combo-size <n>       Only show combos with exactly N toppings");
-                        Console.WriteLine("  --min-combo-size <n>   Only show combos with at least N toppings");
-                        Console.WriteLine("  --max-combo-size <n>   Only show combos with at most N toppings");
+                        Console.WriteLine("  --min-orders <n>          Only show results ordered at least N times (default: 1)");
+                        Console.WriteLine("  --topping <name>          Only show combos that contain an exact topping name");
+                        Console.WriteLine("  --exclude-topping <name>  Exclude combos that contain a specific topping");
+                        Console.WriteLine("  --search <text>           Only show combos where any topping contains the text");
+                        Console.WriteLine("  --combo-size <n>          Only show combos with exactly N toppings");
+                        Console.WriteLine("  --min-combo-size <n>      Only show combos with at least N toppings");
+                        Console.WriteLine("  --max-combo-size <n>      Only show combos with at most N toppings");
                         return;
                 }
             }
@@ -107,7 +135,8 @@ namespace PizzaTopping
             Pizza p = new Pizza();
             p.PizzaTop(filePath, url, topN, minOrders, exportPath, toppingFilter, comboSize,
                        sortAsc, stdoutFormat, singles, excludeTopping, searchText, stats,
-                       minComboSize, maxComboSize);
+                       minComboSize, maxComboSize, showPercent, coOccurrence, offset,
+                       noHeader, verbose);
         }
     }
 }
