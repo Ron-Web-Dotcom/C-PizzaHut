@@ -9,35 +9,47 @@ using System.Linq;
 //Created a Class name Pizza
 class Pizza : ToppingCombination
 {
-    //Created Properties  get
-    public string toppings
+    // Deserialise JSON array directly — no splitting needed
+    public List<string> toppings
     {
         get;
         set;
-
     }
 
     public void PizzaTop(string filePath = null, string url = null, int topN = 15, int minOrders = 1,
         string exportPath = null, string toppingFilter = null, int comboSize = 0,
-        bool sortAsc = false, string stdoutFormat = null, bool singles = false)
+        bool sortAsc = false, string stdoutFormat = null, bool singles = false,
+        string excludeTopping = null, string searchText = null, bool stats = false,
+        int minComboSize = 0, int maxComboSize = 0)
     {
 
         // Create Type list of Objects that can be accessed by index
-        List<Pizza> toppings = GetPizza(filePath, url);
+        List<Pizza> pizzas = GetPizza(filePath, url);
         // if the  object is  empty it will return
-        if (toppings == null) return;
+        if (pizzas == null) return;
 
         // Choose analysis mode: individual toppings vs. combinations
-        IEnumerable<ToppingCombination> topcombination = singles ? GetSinglesCombo(toppings) : GetTopCombo(toppings);
+        IEnumerable<ToppingCombination> topcombination = singles ? GetSinglesCombo(pizzas) : GetTopCombo(pizzas);
 
-        // Normalise the filter once so comparisons are always lowercase
-        string normalizedFilter = toppingFilter?.Trim().ToLowerInvariant();
+        // Normalise filters once so comparisons are always lowercase
+        string normalizedFilter  = toppingFilter?.Trim().ToLowerInvariant();
+        string normalizedExclude = excludeTopping?.Trim().ToLowerInvariant();
+        string normalizedSearch  = searchText?.Trim().ToLowerInvariant();
 
         //The top toppings in Descending Order, filtered, then take topN
         List<ToppingCombination> results = topcombination
             .Where(tc => tc.countt >= minOrders)
-            .Where(tc => normalizedFilter == null || tc.toppingss.Split(',').Contains(normalizedFilter))
-            .Where(tc => comboSize == 0 || tc.toppingss.Split(',').Length == comboSize)
+            // --topping: must contain this exact topping
+            .Where(tc => normalizedFilter  == null || tc.toppingss.Split(',').Contains(normalizedFilter))
+            // --exclude-topping: must NOT contain this topping
+            .Where(tc => normalizedExclude == null || !tc.toppingss.Split(',').Contains(normalizedExclude))
+            // --search: any topping in the combo must contain the search text as a substring
+            .Where(tc => normalizedSearch  == null || tc.toppingss.Split(',').Any(t => t.Contains(normalizedSearch)))
+            // --combo-size: exact number of toppings
+            .Where(tc => comboSize    == 0 || tc.toppingss.Split(',').Length == comboSize)
+            // --min-combo-size / --max-combo-size: range
+            .Where(tc => minComboSize == 0 || tc.toppingss.Split(',').Length >= minComboSize)
+            .Where(tc => maxComboSize == 0 || tc.toppingss.Split(',').Length <= maxComboSize)
             .OrderBy(oi => sortAsc ? oi.countt : -oi.countt)
             .Take(topN)
             .ToList();
@@ -79,6 +91,33 @@ class Pizza : ToppingCombination
 
             if (results.Count == 0)
                 Console.WriteLine("No combinations match the specified filters.");
+        }
+
+        // --stats: dataset summary printed after results
+        if (stats)
+        {
+            var allToppings = pizzas
+                .Where(p => p.toppings != null)
+                .SelectMany(p => p.toppings.Select(t => t.Trim().ToLowerInvariant()).Where(t => !string.IsNullOrEmpty(t)))
+                .ToList();
+
+            int    totalOrders    = pizzas.Count;
+            int    uniqueToppings = allToppings.Distinct().Count();
+            double avgComboSize   = pizzas
+                .Where(p => p.toppings != null && p.toppings.Count > 0)
+                .DefaultIfEmpty()
+                .Average(p => p?.toppings?.Count ?? 0);
+            string topTopping     = allToppings
+                .GroupBy(t => t)
+                .OrderByDescending(g => g.Count())
+                .FirstOrDefault()?.Key ?? "N/A";
+
+            Console.WriteLine();
+            Console.WriteLine("--- Dataset Statistics ---");
+            Console.WriteLine($"Total orders:     {totalOrders}");
+            Console.WriteLine($"Unique toppings:  {uniqueToppings}");
+            Console.WriteLine($"Avg combo size:   {avgComboSize:F2}");
+            Console.WriteLine($"Most popular:     {topTopping}");
         }
 
         // Export results if requested
@@ -144,7 +183,7 @@ class Pizza : ToppingCombination
         {
             return pizzaList
                 .Where(pizza => pizza.toppings != null)
-                .SelectMany(pizza => pizza.toppings.Split(',')
+                .SelectMany(pizza => pizza.toppings
                     .Select(t => t.Trim().ToLowerInvariant())
                     .Where(t => !string.IsNullOrEmpty(t)))
                 .GroupBy(t => t)
@@ -156,13 +195,12 @@ class Pizza : ToppingCombination
         {
             //Create a variable using the datatype — normalise case so "Bacon" and "bacon" group together
             var Pizzahut = pizzaList
-                .Where(pizza => pizza.toppings != null)
-                .Select(pizza => pizza.toppings.Split(',')
+                .Where(pizza => pizza.toppings != null && pizza.toppings.Count > 0)
+                .Select(pizza => pizza.toppings
                     .Select(t => t.Trim().ToLowerInvariant())
                     .Where(t => !string.IsNullOrEmpty(t))
                     .OrderBy(t => t));
 
-            // Fix 4: string.Join is the BCL standard for joining sequences — replaces Aggregate
             IEnumerable<string> aggregated = Pizzahut.Select(sortedToppings => string.Join(",", sortedToppings));
 
             //DAta is Grouped and  Displayed
@@ -182,7 +220,6 @@ class Pizza : ToppingCombination
         {
             try
             {
-                // Fix 5: OrdinalIgnoreCase avoids allocating a lowercased string
                 if (Path.GetExtension(path).Equals(".json", StringComparison.OrdinalIgnoreCase))
                 {
                     var data = exportResults.Select((r, i) => new
