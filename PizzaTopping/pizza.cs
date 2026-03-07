@@ -1,27 +1,21 @@
 using System;
-using Newtonsoft.Json;
-using System.IO;
-using System.Net;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
+using System.Net.Http;
+using Newtonsoft.Json;
 
 namespace PizzaTopping
 {
-    class Pizza
+    internal class Pizza
     {
-        public string toppings
-        {
-            get;
-            set;
-        }
+        public string toppings { get; set; }
 
         public void PizzaTop(string filePath = null, string url = null, int topN = 15, int minOrders = 1,
             string exportPath = null, string toppingFilter = null, int comboSize = 0,
             bool sortAsc = false, string stdoutFormat = null, bool singles = false)
         {
-            // Create a list of Pizza objects from the data source
             List<Pizza> pizzaList = GetPizza(filePath, url);
-            // if the list is empty return
             if (pizzaList == null) return;
 
             // Choose analysis mode: individual toppings vs. combinations
@@ -30,11 +24,12 @@ namespace PizzaTopping
             // Normalise the filter once so comparisons are always lowercase
             string normalizedFilter = toppingFilter?.Trim().ToLowerInvariant();
 
-            //The top toppings in Descending Order, filtered, then take topN
+            // Filter, sort, and take topN results
             List<ToppingCombination> results = topcombination
                 .Where(tc => tc.Count >= minOrders)
-                .Where(tc => normalizedFilter == null || tc.Toppings.Split(',').Contains(normalizedFilter))
-                .Where(tc => comboSize == 0 || tc.Toppings.Split(',').Length == comboSize)
+                // Issue 6 fix: guard against null Toppings before calling Split
+                .Where(tc => normalizedFilter == null || (tc.Toppings != null && tc.Toppings.Split(',').Contains(normalizedFilter)))
+                .Where(tc => comboSize == 0 || (tc.Toppings != null && tc.Toppings.Split(',').Length == comboSize))
                 .OrderBy(oi => sortAsc ? oi.Count : -oi.Count)
                 .Take(topN)
                 .ToList();
@@ -43,7 +38,6 @@ namespace PizzaTopping
 
             if (stdoutFormat != null)
             {
-                // Structured stdout output — clean for piping into other tools
                 if (stdoutFormat == "json")
                 {
                     var data = results.Select((r, i) => new { Rank = i + 1, Toppings = CleanToppings(r), Orders = r.Count });
@@ -54,6 +48,12 @@ namespace PizzaTopping
                     var csvRows = results.Select((r, i) => $"{i + 1},\"{CleanToppings(r)}\",{r.Count}");
                     Console.WriteLine("Rank,Toppings,Orders");
                     Console.WriteLine(string.Join(Environment.NewLine, csvRows));
+                }
+                else
+                {
+                    // Issue 1 fix: unknown --stdout format was silently swallowed; now emit a clear error
+                    Console.Error.WriteLine($"Error: Unknown --stdout format '{stdoutFormat}'. Valid values are: json, csv");
+                    Environment.Exit(1);
                 }
             }
             else
@@ -92,31 +92,24 @@ namespace PizzaTopping
 
                     if (path != null)
                     {
-                        // FileNotFoundException is caught below — no pre-check needed
                         json = File.ReadAllText(path);
                     }
                     else
                     {
-                        string fetchUrl = customUrl ?? "http://brightway.com/CodeTests/pizzas.json";
-                        HttpWebRequest httpWebRequest = System.Net.WebRequest.Create(fetchUrl) as HttpWebRequest;
-
-                        using (HttpWebResponse httpWebResponse = httpWebRequest.GetResponse() as HttpWebResponse)
-                        {
-                            if (httpWebResponse.StatusCode != HttpStatusCode.OK)
-                            {
-                                Console.Error.WriteLine($"Error: Server returned {httpWebResponse.StatusCode} {httpWebResponse.StatusDescription}");
-                                return null;
-                            }
-                            using (var reader = new StreamReader(httpWebResponse.GetResponseStream()))
-                                json = reader.ReadToEnd();
-                        }
+                        // Issue 7 fix: use https (was http — unencrypted, MITM-susceptible)
+                        // Issue 4 & 10 fix: replace obsolete HttpWebRequest with HttpClient;
+                        //   the old `WebRequest.Create(url) as HttpWebRequest` also returned null
+                        //   for non-HTTP URLs, causing a NullReferenceException.
+                        string fetchUrl = customUrl ?? "https://brightway.com/CodeTests/pizzas.json";
+                        using var client = new HttpClient();
+                        json = client.GetStringAsync(fetchUrl).GetAwaiter().GetResult();
                     }
 
                     return JsonConvert.DeserializeObject<List<Pizza>>(json);
                 }
-                catch (WebException ex)
+                catch (HttpRequestException ex)
                 {
-                    Console.Error.WriteLine($"Error: Could not reach the server. {ex.Message}");
+                    Console.Error.WriteLine($"Error: Could not fetch data from server. {ex.Message}");
                     return null;
                 }
                 catch (JsonException ex)
@@ -146,23 +139,23 @@ namespace PizzaTopping
             // Rank topping combinations by frequency
             IEnumerable<ToppingCombination> GetTopCombo(List<Pizza> list)
             {
-                var Pizzahut = list
+                // Issue 12 fix: rename PascalCase local variable `Pizzahut` to camelCase `pizzas`
+                var pizzas = list
                     .Where(pizza => pizza.toppings != null)
                     .Select(pizza => pizza.toppings.Split(',')
                         .Select(t => t.Trim().ToLowerInvariant())
                         .Where(t => !string.IsNullOrEmpty(t))
                         .OrderBy(t => t));
 
-                IEnumerable<string> aggregated = Pizzahut.Select(sortedToppings => string.Join(",", sortedToppings));
+                // Issue 5 fix: filter out empty-string combos produced when all toppings
+                //   on a pizza were blank after trimming (string.Join returns "" in that case)
+                IEnumerable<string> aggregated = pizzas
+                    .Select(sortedToppings => string.Join(",", sortedToppings))
+                    .Where(combo => !string.IsNullOrEmpty(combo));
 
-                IEnumerable<ToppingCombination> grouped = aggregated
-                   .GroupBy(toppingsGroup => toppingsGroup)
-                   .Select(toppingsGroup => new ToppingCombination()
-                   {
-                       Toppings = toppingsGroup.Key,
-                       Count    = toppingsGroup.Count()
-                   });
-                return grouped;
+                return aggregated
+                    .GroupBy(combo => combo)
+                    .Select(g => new ToppingCombination { Toppings = g.Key, Count = g.Count() });
             }
 
             // Export results to CSV or JSON

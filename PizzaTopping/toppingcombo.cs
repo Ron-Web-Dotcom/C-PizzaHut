@@ -1,8 +1,8 @@
 namespace PizzaTopping
 {
-    public class ToppingCombination
+    internal class ToppingCombination
     {
-        public int Count;
-        public string Toppings;
+        public int Count { get; set; }
+        public string Toppings { get; set; }
     }
 }
