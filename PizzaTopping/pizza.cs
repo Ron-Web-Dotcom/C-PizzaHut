@@ -13,13 +13,35 @@ namespace PizzaTopping
 
         public void PizzaTop(string filePath = null, string url = null, int topN = 15, int minOrders = 1,
             string exportPath = null, string toppingFilter = null, int comboSize = 0,
-            bool sortAsc = false, string stdoutFormat = null, bool singles = false)
+            bool sortAsc = false, string stdoutFormat = null, bool singles = false,
+            bool showChart = false, bool showStats = false, bool pairs = false,
+            string excludeTopping = null)
         {
             List<Pizza> pizzaList = GetPizza(filePath, url);
             if (pizzaList == null) return;
 
-            // Choose analysis mode: individual toppings vs. combinations
-            IEnumerable<ToppingCombination> topcombination = singles ? GetSinglesCombo(pizzaList) : GetTopCombo(pizzaList);
+            // --exclude: remove pizzas that contain the specified topping before analysis
+            if (excludeTopping != null)
+            {
+                string excl = excludeTopping.Trim().ToLowerInvariant();
+                pizzaList = pizzaList
+                    .Where(p => p.toppings == null || !p.toppings.Split(',')
+                        .Select(t => t.Trim().ToLowerInvariant())
+                        .Contains(excl))
+                    .ToList();
+
+                if (pizzaList.Count == 0)
+                {
+                    Console.Error.WriteLine($"Warning: No pizzas remain after excluding '{excl}'.");
+                    return;
+                }
+            }
+
+            // Choose analysis mode: pairs, singles, or full combinations
+            IEnumerable<ToppingCombination> topcombination =
+                pairs   ? GetPairsCombo(pizzaList)  :
+                singles ? GetSinglesCombo(pizzaList) :
+                          GetTopCombo(pizzaList);
 
             // Normalise the filter once so comparisons are always lowercase
             string normalizedFilter = toppingFilter?.Trim().ToLowerInvariant();
@@ -27,7 +49,6 @@ namespace PizzaTopping
             // Filter, sort, and take topN results
             List<ToppingCombination> results = topcombination
                 .Where(tc => tc.Count >= minOrders)
-                // Issue 6 fix: guard against null Toppings before calling Split
                 .Where(tc => normalizedFilter == null || (tc.Toppings != null && tc.Toppings.Split(',').Contains(normalizedFilter)))
                 .Where(tc => comboSize == 0 || (tc.Toppings != null && tc.Toppings.Split(',').Length == comboSize))
                 .OrderBy(oi => sortAsc ? oi.Count : -oi.Count)
@@ -35,6 +56,13 @@ namespace PizzaTopping
                 .ToList();
 
             string CleanToppings(ToppingCombination r) => (r.Toppings ?? "").TrimStart(',');
+
+            // --stats: print dataset summary; use stderr when --stdout is active so piping still works
+            if (showStats)
+            {
+                TextWriter statsOut = stdoutFormat != null ? Console.Error : Console.Out;
+                PrintStats(pizzaList, results, statsOut);
+            }
 
             if (stdoutFormat != null)
             {
@@ -51,7 +79,6 @@ namespace PizzaTopping
                 }
                 else
                 {
-                    // Issue 1 fix: unknown --stdout format was silently swallowed; now emit a clear error
                     Console.Error.WriteLine($"Error: Unknown --stdout format '{stdoutFormat}'. Valid values are: json, csv");
                     Environment.Exit(1);
                 }
@@ -63,14 +90,32 @@ namespace PizzaTopping
                 int toppingsWidth = results.Count > 0 ? Math.Max(8, results.Max(r => CleanToppings(r).Length)) : 8;
                 int ordersWidth   = results.Count > 0 ? Math.Max(6, results.Max(r => r.Count.ToString().Length)) : 6;
 
-                string separator = new string('-', rankWidth + 2 + toppingsWidth + 2 + ordersWidth);
-                Console.WriteLine($"{"Rank".PadLeft(rankWidth)}  {"Toppings".PadRight(toppingsWidth)}  {"Orders".PadLeft(ordersWidth)}");
-                Console.WriteLine(separator);
+                // --chart: bar column is always 20 chars wide
+                const int barWidth = 20;
+                int maxCount = results.Count > 0 ? results.Max(r => r.Count) : 1;
+
+                string header    = $"{"Rank".PadLeft(rankWidth)}  {"Toppings".PadRight(toppingsWidth)}  {"Orders".PadLeft(ordersWidth)}";
+                int separatorLen = rankWidth + 2 + toppingsWidth + 2 + ordersWidth;
+                if (showChart)
+                {
+                    header       += $"  {"Distribution".PadRight(barWidth)}";
+                    separatorLen += 2 + barWidth;
+                }
+
+                Console.WriteLine(header);
+                Console.WriteLine(new string('-', separatorLen));
 
                 int num = 1;
                 foreach (ToppingCombination taste in results)
                 {
-                    Console.WriteLine($"{num.ToString().PadLeft(rankWidth)}  {CleanToppings(taste).PadRight(toppingsWidth)}  {taste.Count.ToString().PadLeft(ordersWidth)}");
+                    string line = $"{num.ToString().PadLeft(rankWidth)}  {CleanToppings(taste).PadRight(toppingsWidth)}  {taste.Count.ToString().PadLeft(ordersWidth)}";
+                    if (showChart)
+                    {
+                        int filled = maxCount > 0 ? (int)Math.Round((double)taste.Count / maxCount * barWidth) : 0;
+                        string bar = new string('\u2588', filled).PadRight(barWidth, '\u2591');
+                        line += $"  {bar}";
+                    }
+                    Console.WriteLine(line);
                     num++;
                 }
 
@@ -96,10 +141,6 @@ namespace PizzaTopping
                     }
                     else
                     {
-                        // Issue 7 fix: use https (was http — unencrypted, MITM-susceptible)
-                        // Issue 4 & 10 fix: replace obsolete HttpWebRequest with HttpClient;
-                        //   the old `WebRequest.Create(url) as HttpWebRequest` also returned null
-                        //   for non-HTTP URLs, causing a NullReferenceException.
                         string fetchUrl = customUrl ?? "https://brightway.com/CodeTests/pizzas.json";
                         using var client = new HttpClient();
                         json = client.GetStringAsync(fetchUrl).GetAwaiter().GetResult();
@@ -124,6 +165,29 @@ namespace PizzaTopping
                 }
             }
 
+            // --stats: summary of the loaded dataset
+            void PrintStats(List<Pizza> list, List<ToppingCombination> res, TextWriter output)
+            {
+                var allToppings = list
+                    .Where(p => p.toppings != null)
+                    .SelectMany(p => p.toppings.Split(',')
+                        .Select(t => t.Trim().ToLowerInvariant())
+                        .Where(t => !string.IsNullOrEmpty(t)))
+                    .ToList();
+
+                int pizzasWithToppings = list.Count(p => !string.IsNullOrWhiteSpace(p.toppings));
+                double avgToppings     = pizzasWithToppings > 0 ? (double)allToppings.Count / pizzasWithToppings : 0;
+
+                output.WriteLine("=== Dataset Summary ===");
+                output.WriteLine($"  Total pizzas loaded : {list.Count}");
+                output.WriteLine($"  Pizzas with toppings: {pizzasWithToppings}");
+                output.WriteLine($"  Unique toppings     : {allToppings.Distinct().Count()}");
+                output.WriteLine($"  Total topping uses  : {allToppings.Count}");
+                output.WriteLine($"  Avg toppings/pizza  : {avgToppings:F2}");
+                output.WriteLine($"  Results shown       : {res.Count}");
+                output.WriteLine();
+            }
+
             // Rank individual toppings by frequency
             IEnumerable<ToppingCombination> GetSinglesCombo(List<Pizza> list)
             {
@@ -136,10 +200,35 @@ namespace PizzaTopping
                     .Select(g => new ToppingCombination { Toppings = g.Key, Count = g.Count() });
             }
 
-            // Rank topping combinations by frequency
+            // --pairs: rank every 2-topping co-occurrence by how many pizzas share that pair,
+            // regardless of other toppings on the pizza (market-basket style)
+            IEnumerable<ToppingCombination> GetPairsCombo(List<Pizza> list)
+            {
+                return list
+                    .Where(pizza => pizza.toppings != null)
+                    .SelectMany(pizza =>
+                    {
+                        var tops = pizza.toppings.Split(',')
+                            .Select(t => t.Trim().ToLowerInvariant())
+                            .Where(t => !string.IsNullOrEmpty(t))
+                            .Distinct()
+                            .OrderBy(t => t)
+                            .ToList();
+
+                        // Emit every unique pair from this pizza
+                        var pairList = new List<string>();
+                        for (int a = 0; a < tops.Count; a++)
+                            for (int b = a + 1; b < tops.Count; b++)
+                                pairList.Add($"{tops[a]},{tops[b]}");
+                        return pairList;
+                    })
+                    .GroupBy(pair => pair)
+                    .Select(g => new ToppingCombination { Toppings = g.Key, Count = g.Count() });
+            }
+
+            // Rank topping combinations (exact full combos) by frequency
             IEnumerable<ToppingCombination> GetTopCombo(List<Pizza> list)
             {
-                // Issue 12 fix: rename PascalCase local variable `Pizzahut` to camelCase `pizzas`
                 var pizzas = list
                     .Where(pizza => pizza.toppings != null)
                     .Select(pizza => pizza.toppings.Split(',')
@@ -147,8 +236,6 @@ namespace PizzaTopping
                         .Where(t => !string.IsNullOrEmpty(t))
                         .OrderBy(t => t));
 
-                // Issue 5 fix: filter out empty-string combos produced when all toppings
-                //   on a pizza were blank after trimming (string.Join returns "" in that case)
                 IEnumerable<string> aggregated = pizzas
                     .Select(sortedToppings => string.Join(",", sortedToppings))
                     .Where(combo => !string.IsNullOrEmpty(combo));
