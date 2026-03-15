@@ -12,6 +12,14 @@ A .NET 8 console application that reads pizza order data (from a local JSON file
 dotnet build PizzaTopping/PizzaTopping.csproj
 ```
 
+## Tests
+
+```bash
+dotnet test PizzaTopping.Tests/PizzaTopping.Tests.csproj
+```
+
+The test suite covers combo counting, case-insensitivity, order-independence, all four analysis modes (`--singles`, `--pairs`, full combos), every filter flag, both sort directions, JSON/CSV stdout formats, `--stats`, `--chart`, and file export — 24 tests total.
+
 ## Usage
 
 ```bash
