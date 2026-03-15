@@ -29,6 +29,13 @@ internal static class Program
         // -- Analysis mode --
         bool    singles      = false;
         string? coOccurrence = null;
+        bool    distribution = false;
+
+        // -- Comparison --
+        string? compareSource = null;
+
+        // -- Display options --
+        bool groupBySize = false;
 
         // -- Filters --
         int     minOrders      = 1;
@@ -87,6 +94,19 @@ internal static class Program
                 case "--co-occurrence":
                     if (i + 1 < args.Length) coOccurrence = args[++i];
                     break;
+                case "--distribution":
+                    distribution = true;
+                    break;
+
+                // -- Comparison --
+                case "--compare":
+                    if (i + 1 < args.Length) compareSource = args[++i];
+                    break;
+
+                // -- Display options --
+                case "--group-by-size":
+                    groupBySize = true;
+                    break;
 
                 // -- Filters --
                 case "--min-orders":
@@ -121,7 +141,8 @@ internal static class Program
             filePath, url, topN, minOrders, exportPath, toppingFilter, comboSize,
             sortAsc, stdoutFormat, singles, excludeTopping, searchText, stats,
             minComboSize, maxComboSize, showPercent, coOccurrence, offset,
-            noHeader, verbose);
+            noHeader, verbose,
+            distribution, groupBySize, compareSource);
     }
 
     /// <summary>
@@ -138,13 +159,21 @@ internal static class Program
         Console.WriteLine("Analysis mode (pick one):");
         Console.WriteLine("  --singles                 Rank individual toppings by frequency");
         Console.WriteLine("  --co-occurrence <topping> Rank toppings that appear most often alongside <topping>");
+        Console.WriteLine("  --distribution            Show a histogram of topping counts across all orders");
         Console.WriteLine("  (default)                 Rank topping combinations by frequency");
+        Console.WriteLine();
+        Console.WriteLine("Comparison:");
+        Console.WriteLine("  --compare <source>        Compare results against a second dataset.");
+        Console.WriteLine("                            <source> can be a file path or a URL.");
+        Console.WriteLine("                            Adds Current / Baseline / Delta columns.");
+        Console.WriteLine("                            Respects --top, --offset, --sort, --percent, --export.");
         Console.WriteLine();
         Console.WriteLine("Output control:");
         Console.WriteLine("  --top <n>                 Show top N results (default: 15)");
         Console.WriteLine("  --offset <n>              Skip first N results — for pagination with --top");
         Console.WriteLine("  --sort asc|desc           Sort order — asc = least popular first (default: desc)");
         Console.WriteLine("  --percent                 Add a % column showing share of total orders");
+        Console.WriteLine("  --group-by-size           Group table output by topping count with section headers");
         Console.WriteLine("  --no-header               Suppress header row and separator line");
         Console.WriteLine("  --verbose                 Print data source, record count, and active filters");
         Console.WriteLine("  --stdout json|csv         Write results as JSON or CSV to stdout instead of a table");

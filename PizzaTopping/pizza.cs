@@ -42,6 +42,9 @@ public class Pizza
     /// <param name="offset">Number of results to skip before taking <paramref name="topN"/> (for pagination).</param>
     /// <param name="noHeader">When <see langword="true"/>, suppress the table header row and separator line.</param>
     /// <param name="verbose">When <see langword="true"/>, print source, record count, and active filters before results.</param>
+    /// <param name="distribution">When <see langword="true"/>, show a topping-count histogram instead of the normal results table.</param>
+    /// <param name="groupBySize">When <see langword="true"/>, insert section headers between combo-size groups in table output.</param>
+    /// <param name="compareSource">File path or URL of a second dataset to compare against. Shows Current/Baseline/Delta columns.</param>
     public async Task PizzaTop(
         string? filePath = null, string? url = null, int topN = 15, int minOrders = 1,
         string? exportPath = null, string? toppingFilter = null, int comboSize = 0,
@@ -49,13 +52,22 @@ public class Pizza
         string? excludeTopping = null, string? searchText = null, bool stats = false,
         int minComboSize = 0, int maxComboSize = 0,
         bool showPercent = false, string? coOccurrence = null, int offset = 0,
-        bool noHeader = false, bool verbose = false)
+        bool noHeader = false, bool verbose = false,
+        bool distribution = false, bool groupBySize = false, string? compareSource = null)
     {
         List<Pizza>? pizzas = await LoadPizzas(filePath, url);
         if (pizzas == null) return;
 
         // Total orders is computed before any filtering, so --percent reflects the full dataset.
         int totalOrders = pizzas.Count;
+
+        // --distribution: show a topping-count histogram and exit.
+        if (distribution)
+        {
+            PrintDistribution(pizzas, totalOrders, showPercent, noHeader);
+            if (exportPath != null) ExportDistribution(pizzas, totalOrders, exportPath);
+            return;
+        }
 
         // Choose analysis mode: co-occurrence takes priority over singles, which takes priority over combos.
         IEnumerable<ToppingCombination> combinations;
@@ -94,6 +106,42 @@ public class Pizza
         // Local helper: percentage share of total orders as a formatted string.
         string PctStr(ToppingCombination r) =>
             $"{r.Count * 100.0 / (totalOrders == 0 ? 1 : totalOrders):F1}%";
+
+        // --compare: load a second dataset and show a side-by-side Current/Baseline/Delta table.
+        if (compareSource != null)
+        {
+            bool isUrl = compareSource.StartsWith("http://", StringComparison.OrdinalIgnoreCase)
+                      || compareSource.StartsWith("https://", StringComparison.OrdinalIgnoreCase);
+
+            List<Pizza>? baseline = await LoadPizzas(
+                isUrl ? null : compareSource,
+                isUrl ? compareSource : null);
+            if (baseline == null) return;
+
+            int baselineTotal = baseline.Count;
+
+            // Build the baseline combo set using the same analysis mode as the current run.
+            IEnumerable<ToppingCombination> baselineCombinations = coOccurrence != null
+                ? GetCoOccurrence(baseline, coOccurrence)
+                : singles ? GetSinglesCombo(baseline) : GetTopCombo(baseline);
+
+            Dictionary<string, int> baselineLookup =
+                baselineCombinations.ToDictionary(tc => tc.Toppings, tc => tc.Count);
+
+            if (verbose)
+            {
+                Console.WriteLine($"Current:  {(filePath != null ? $"file: {filePath}" : $"url: {url ?? "default"}")} ({totalOrders} orders)");
+                Console.WriteLine($"Baseline: {compareSource} ({baselineTotal} orders)");
+                Console.WriteLine();
+            }
+
+            PrintComparison(results, baselineLookup, totalOrders, baselineTotal, offset, noHeader, showPercent);
+
+            if (exportPath != null)
+                ExportComparison(results, baselineLookup, totalOrders, baselineTotal, exportPath, offset, showPercent);
+
+            return;
+        }
 
         // --verbose: print source/mode/filter summary before results (table mode only).
         if (verbose && stdoutFormat == null)
@@ -168,9 +216,23 @@ public class Pizza
                 Console.WriteLine(separator);
             }
 
-            int rank = startRank;
+            int rank             = startRank;
+            int currentGroupSize = -1;
+
             foreach (ToppingCombination combo in results)
             {
+                // --group-by-size: insert a labelled section header whenever the topping count changes.
+                if (groupBySize)
+                {
+                    int size = SplitToppings(combo.Toppings).Length;
+                    if (size != currentGroupSize)
+                    {
+                        if (currentGroupSize != -1) Console.WriteLine();
+                        Console.WriteLine($"── {size} topping{(size == 1 ? "" : "s")} ──");
+                        currentGroupSize = size;
+                    }
+                }
+
                 string row = showPercent
                     ? $"{rank.ToString().PadLeft(rankWidth)}  {CleanToppings(combo).PadRight(toppingsWidth)}  {combo.Count.ToString().PadLeft(ordersWidth)}  {PctStr(combo).PadLeft(pctWidth)}"
                     : $"{rank.ToString().PadLeft(rankWidth)}  {CleanToppings(combo).PadRight(toppingsWidth)}  {combo.Count.ToString().PadLeft(ordersWidth)}";
@@ -221,7 +283,7 @@ public class Pizza
     }
 
     // -------------------------------------------------------------------------
-    // Private static helpers
+    // Private static helpers — data loading & analysis
     // -------------------------------------------------------------------------
 
     /// <summary>
@@ -328,6 +390,144 @@ public class Pizza
             .Select(g => new ToppingCombination { Toppings = g.Key, Count = g.Count() });
     }
 
+    // -------------------------------------------------------------------------
+    // Private static helpers — output & export
+    // -------------------------------------------------------------------------
+
+    /// <summary>
+    /// Prints a histogram of how many pizza orders contain each number of toppings.
+    /// Supports <c>--percent</c> and <c>--no-header</c>.
+    /// </summary>
+    /// <param name="pizzas">The full list of pizza orders.</param>
+    /// <param name="totalOrders">Pre-computed total order count used for percentage calculations.</param>
+    /// <param name="showPercent">When <see langword="true"/>, add a percentage column.</param>
+    /// <param name="noHeader">When <see langword="true"/>, suppress the header row and separator.</param>
+    private static void PrintDistribution(List<Pizza> pizzas, int totalOrders, bool showPercent, bool noHeader)
+    {
+        var dist = pizzas
+            .GroupBy(p => p.Toppings?.Count ?? 0)
+            .OrderBy(g => g.Key)
+            .Select(g => (Size: g.Key, Count: g.Count()))
+            .ToList();
+
+        if (dist.Count == 0)
+        {
+            Console.WriteLine("No topping data available.");
+            return;
+        }
+
+        int sizeWidth  = Math.Max("Toppings".Length, dist.Max(d => d.Size.ToString().Length));
+        int countWidth = Math.Max("Orders".Length,   totalOrders.ToString().Length);
+        int pctWidth   = showPercent ? "% of Total".Length : 0;
+
+        int    totalWidth = sizeWidth + 2 + countWidth + (showPercent ? 2 + pctWidth : 0);
+        string separator  = new string('-', totalWidth);
+
+        if (!noHeader)
+        {
+            string header = showPercent
+                ? $"{"Toppings".PadLeft(sizeWidth)}  {"Orders".PadLeft(countWidth)}  {"% of Total".PadLeft(pctWidth)}"
+                : $"{"Toppings".PadLeft(sizeWidth)}  {"Orders".PadLeft(countWidth)}";
+            Console.WriteLine(header);
+            Console.WriteLine(separator);
+        }
+
+        foreach (var (size, count) in dist)
+        {
+            string pct = $"{count * 100.0 / (totalOrders == 0 ? 1 : totalOrders):F1}%";
+            string row = showPercent
+                ? $"{size.ToString().PadLeft(sizeWidth)}  {count.ToString().PadLeft(countWidth)}  {pct.PadLeft(pctWidth)}"
+                : $"{size.ToString().PadLeft(sizeWidth)}  {count.ToString().PadLeft(countWidth)}";
+            Console.WriteLine(row);
+        }
+
+        // Always print a total row so the table is self-contained.
+        Console.WriteLine(separator);
+        string totalRow = showPercent
+            ? $"{"Total".PadLeft(sizeWidth)}  {totalOrders.ToString().PadLeft(countWidth)}  {"100.0%".PadLeft(pctWidth)}"
+            : $"{"Total".PadLeft(sizeWidth)}  {totalOrders.ToString().PadLeft(countWidth)}";
+        Console.WriteLine(totalRow);
+    }
+
+    /// <summary>
+    /// Prints a side-by-side comparison table showing the current dataset's results
+    /// against counts from a baseline dataset, with a signed delta column.
+    /// </summary>
+    /// <param name="results">Filtered and ranked results from the current dataset.</param>
+    /// <param name="baselineLookup">Topping-string → order-count map built from the baseline dataset.</param>
+    /// <param name="currentTotal">Total orders in the current dataset (for percentage calculations).</param>
+    /// <param name="baselineTotal">Total orders in the baseline dataset (for percentage calculations).</param>
+    /// <param name="offset">Rank offset applied to result numbering.</param>
+    /// <param name="noHeader">When <see langword="true"/>, suppress the header row and separator.</param>
+    /// <param name="showPercent">When <see langword="true"/>, show percentage share instead of raw counts; delta is in percentage points.</param>
+    private static void PrintComparison(
+        List<ToppingCombination> results,
+        Dictionary<string, int> baselineLookup,
+        int currentTotal, int baselineTotal,
+        int offset, bool noHeader, bool showPercent)
+    {
+        int startRank     = offset + 1;
+        int endRank       = offset + results.Count;
+        int rankWidth     = Math.Max(4, endRank.ToString().Length);
+        int toppingsWidth = results.Count > 0 ? Math.Max(8, results.Max(r => CleanToppings(r).Length)) : 8;
+
+        // When showing percentages the value columns are fixed-width ("100.0%" = 6 chars).
+        // When showing raw counts, size them to the largest value present.
+        int currentWidth  = showPercent
+            ? Math.Max(7,  "Current".Length)
+            : Math.Max(7,  results.Count > 0 ? results.Max(r => r.Count.ToString().Length) : 7);
+        int baselineWidth = showPercent
+            ? Math.Max(8,  "Baseline".Length)
+            : Math.Max(8,  baselineLookup.Values.DefaultIfEmpty(0).Max().ToString().Length);
+        int deltaWidth    = showPercent
+            ? Math.Max(8,  "Delta".Length)   // e.g. "+100.0%"
+            : Math.Max(7,  "Delta".Length);  // e.g. "+99999"
+
+        int    totalWidth = rankWidth + 2 + toppingsWidth + 2 + currentWidth + 2 + baselineWidth + 2 + deltaWidth;
+        string separator  = new string('-', totalWidth);
+
+        if (!noHeader)
+        {
+            string header = $"{"Rank".PadLeft(rankWidth)}  {"Toppings".PadRight(toppingsWidth)}  {"Current".PadLeft(currentWidth)}  {"Baseline".PadLeft(baselineWidth)}  {"Delta".PadLeft(deltaWidth)}";
+            Console.WriteLine(header);
+            Console.WriteLine(separator);
+        }
+
+        int rank = startRank;
+        foreach (ToppingCombination combo in results)
+        {
+            bool inBaseline = baselineLookup.TryGetValue(combo.Toppings, out int baseCount);
+
+            string currentStr, baselineStr, deltaStr;
+
+            if (showPercent)
+            {
+                double curPct  = combo.Count * 100.0 / (currentTotal  == 0 ? 1 : currentTotal);
+                double basePct = inBaseline ? baseCount * 100.0 / (baselineTotal == 0 ? 1 : baselineTotal) : 0.0;
+                double delta   = curPct - basePct;
+
+                currentStr  = $"{curPct:F1}%";
+                baselineStr = inBaseline ? $"{basePct:F1}%" : "N/A";
+                deltaStr    = !inBaseline ? "(new)" : (delta >= 0 ? $"+{delta:F1}%" : $"{delta:F1}%");
+            }
+            else
+            {
+                int delta = combo.Count - baseCount; // baseCount is 0 when !inBaseline
+
+                currentStr  = combo.Count.ToString();
+                baselineStr = inBaseline ? baseCount.ToString() : "N/A";
+                deltaStr    = !inBaseline ? "(new)" : (delta >= 0 ? $"+{delta}" : delta.ToString());
+            }
+
+            string row = $"{rank.ToString().PadLeft(rankWidth)}  {CleanToppings(combo).PadRight(toppingsWidth)}  {currentStr.PadLeft(currentWidth)}  {baselineStr.PadLeft(baselineWidth)}  {deltaStr.PadLeft(deltaWidth)}";
+            Console.WriteLine(row);
+            rank++;
+        }
+
+        if (results.Count == 0)
+            Console.WriteLine("No combinations match the specified filters.");
+    }
+
     /// <summary>
     /// Exports <paramref name="exportResults"/> to a CSV or JSON file.
     /// The format is inferred from the file extension (<c>.json</c> → JSON; anything else → CSV).
@@ -363,6 +563,116 @@ public class Pizza
         catch (Exception ex)
         {
             Console.Error.WriteLine($"Error exporting results: {ex.Message}");
+        }
+    }
+
+    /// <summary>
+    /// Exports the topping-count distribution to a CSV or JSON file.
+    /// Always includes a Percent column in the exported data.
+    /// </summary>
+    /// <param name="pizzas">The full list of pizza orders.</param>
+    /// <param name="totalOrders">Pre-computed total order count.</param>
+    /// <param name="path">Destination file path.</param>
+    private static void ExportDistribution(List<Pizza> pizzas, int totalOrders, string path)
+    {
+        try
+        {
+            var dist = pizzas
+                .GroupBy(p => p.Toppings?.Count ?? 0)
+                .OrderBy(g => g.Key)
+                .Select(g => new
+                {
+                    Size    = g.Key,
+                    Orders  = g.Count(),
+                    Percent = $"{g.Count() * 100.0 / (totalOrders == 0 ? 1 : totalOrders):F1}%"
+                })
+                .ToList();
+
+            if (Path.GetExtension(path).Equals(".json", StringComparison.OrdinalIgnoreCase))
+            {
+                File.WriteAllText(path, JsonConvert.SerializeObject(dist, Formatting.Indented));
+            }
+            else
+            {
+                var csvRows = dist.Select(d => $"{d.Size},{d.Orders},{d.Percent}");
+                File.WriteAllText(path,
+                    "Size,Orders,Percent" + Environment.NewLine +
+                    string.Join(Environment.NewLine, csvRows));
+            }
+            Console.WriteLine($"Distribution exported to: {path}");
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"Error exporting distribution: {ex.Message}");
+        }
+    }
+
+    /// <summary>
+    /// Exports a comparison result set to a CSV or JSON file, including Current, Baseline, and Delta columns.
+    /// </summary>
+    /// <param name="results">Filtered and ranked results from the current dataset.</param>
+    /// <param name="baselineLookup">Topping-string → order-count map built from the baseline dataset.</param>
+    /// <param name="currentTotal">Total orders in the current dataset.</param>
+    /// <param name="baselineTotal">Total orders in the baseline dataset.</param>
+    /// <param name="path">Destination file path.</param>
+    /// <param name="offset">Rank offset applied to result numbering.</param>
+    /// <param name="showPercent">When <see langword="true"/>, include percentage columns in addition to raw counts.</param>
+    private static void ExportComparison(
+        List<ToppingCombination> results,
+        Dictionary<string, int> baselineLookup,
+        int currentTotal, int baselineTotal,
+        string path, int offset, bool showPercent)
+    {
+        try
+        {
+            // Build a unified row shape regardless of format so we don't duplicate the logic.
+            var rows = results.Select((r, i) =>
+            {
+                bool found  = baselineLookup.TryGetValue(r.Toppings, out int bc);
+                int  delta  = r.Count - bc; // bc is 0 when not found
+                double curPct  = r.Count * 100.0 / (currentTotal  == 0 ? 1 : currentTotal);
+                double basePct = found ? bc * 100.0 / (baselineTotal == 0 ? 1 : baselineTotal) : 0.0;
+
+                return new
+                {
+                    Rank        = offset + i + 1,
+                    Toppings    = CleanToppings(r),
+                    Current     = r.Count,
+                    Baseline    = found ? (int?)bc    : null,
+                    Delta       = found ? (int?)delta : null,
+                    CurrentPct  = $"{curPct:F1}%",
+                    BaselinePct = found ? $"{basePct:F1}%" : "N/A",
+                    DeltaPct    = found ? (delta >= 0 ? $"+{curPct - basePct:F1}%" : $"{curPct - basePct:F1}%") : "(new)"
+                };
+            }).ToList();
+
+            if (Path.GetExtension(path).Equals(".json", StringComparison.OrdinalIgnoreCase))
+            {
+                // Always write all fields to JSON so the file is self-describing.
+                File.WriteAllText(path, JsonConvert.SerializeObject(rows, Formatting.Indented));
+            }
+            else
+            {
+                string FormatDelta(int? d) =>
+                    d == null ? "(new)" : (d >= 0 ? $"+{d}" : d.ToString()!);
+
+                string header = showPercent
+                    ? "Rank,Toppings,Current,Baseline,Delta,Current%,Baseline%,Delta%"
+                    : "Rank,Toppings,Current,Baseline,Delta";
+
+                var csvRows = rows.Select(r => showPercent
+                    ? $"{r.Rank},\"{r.Toppings}\",{r.Current},{r.Baseline?.ToString() ?? "N/A"},{FormatDelta(r.Delta)},{r.CurrentPct},{r.BaselinePct},{r.DeltaPct}"
+                    : $"{r.Rank},\"{r.Toppings}\",{r.Current},{r.Baseline?.ToString() ?? "N/A"},{FormatDelta(r.Delta)}");
+
+                File.WriteAllText(path,
+                    header + Environment.NewLine +
+                    string.Join(Environment.NewLine, csvRows));
+            }
+            Console.WriteLine($"Comparison exported to: {path}");
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"Error exporting comparison: {ex.Message}");
         }
     }
 
