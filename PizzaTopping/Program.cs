@@ -2,25 +2,34 @@ using System;
 
 namespace PizzaTopping
 {
+    /// <summary>
+    /// Application entry point. Parses command-line arguments and delegates all
+    /// analysis work to <see cref="Pizza.PizzaTop"/>.
+    /// </summary>
     internal class Program
     {
+        /// <summary>
+        /// Parses <paramref name="args"/>, validates flags that have constraints
+        /// (e.g. <c>--top</c> must be &gt; 0), and calls <see cref="Pizza.PizzaTop"/>
+        /// with the resolved options. Prints usage to stdout and exits on <c>--help</c>.
+        /// </summary>
         static void Main(string[] args)
         {
-            // Parse command-line options
-            string filePath       = null;
-            string url            = null;
-            int    topN           = 15;
-            int    minOrders      = 1;
-            string exportPath     = null;
-            string toppingFilter  = null;
-            int    comboSize      = 0;
-            bool   sortAsc        = false;
-            string stdoutFormat   = null;
-            bool   singles        = false;
-            bool   showChart      = false;
-            bool   showStats      = false;
-            bool   pairs          = false;
-            string excludeTopping = null;
+            // Declare all options with their documented defaults.
+            string filePath       = null;   // --file
+            string url            = null;   // --url
+            int    topN           = 15;     // --top
+            int    minOrders      = 1;      // --min-orders
+            string exportPath     = null;   // --export
+            string toppingFilter  = null;   // --topping
+            int    comboSize      = 0;      // --combo-size (0 = disabled)
+            bool   sortAsc        = false;  // --sort asc|desc
+            string stdoutFormat   = null;   // --stdout json|csv
+            bool   singles        = false;  // --singles
+            bool   showChart      = false;  // --chart
+            bool   showStats      = false;  // --stats
+            bool   pairs          = false;  // --pairs
+            string excludeTopping = null;   // --exclude
 
             for (int i = 0; i < args.Length; i++)
             {
@@ -33,6 +42,8 @@ namespace PizzaTopping
                         if (i + 1 < args.Length) url = args[++i];
                         break;
                     case "--top":
+                        // Require a strictly positive integer; zero or negative values
+                        // either crash (.NET Core 3.1) or silently return empty results.
                         if (i + 1 < args.Length)
                         {
                             if (int.TryParse(args[++i], out int n) && n > 0)
@@ -57,6 +68,8 @@ namespace PizzaTopping
                         if (i + 1 < args.Length && int.TryParse(args[++i], out int cs)) comboSize = cs;
                         break;
                     case "--sort":
+                        // Warn on unrecognised values instead of silently falling back to
+                        // desc, which made typos (e.g. "--sort decs") invisible to the user.
                         if (i + 1 < args.Length)
                         {
                             string sortVal = args[++i];

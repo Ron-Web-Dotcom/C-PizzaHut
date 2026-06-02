@@ -18,7 +18,7 @@ dotnet build PizzaTopping/PizzaTopping.csproj
 dotnet test PizzaTopping.Tests/PizzaTopping.Tests.csproj
 ```
 
-The test suite covers combo counting, case-insensitivity, order-independence, all four analysis modes (`--singles`, `--pairs`, full combos), every filter flag, both sort directions, JSON/CSV stdout formats, `--stats`, `--chart`, and file export — 24 tests total.
+The test suite covers combo counting, case-insensitivity, order-independence, all four analysis modes (`--singles`, `--pairs`, full combos), every filter flag, both sort directions, JSON/CSV stdout formats, `--stats`, `--chart`, and file export — 27 tests total.
 
 ## Usage
 
@@ -94,4 +94,47 @@ The input JSON must be an array of objects with a `toppings` field (comma-separa
   { "toppings": "pepperoni,mushrooms,onions" },
   { "toppings": "bacon,cheese" }
 ]
+```
+
+## Roadmap
+
+The following features are planned for future releases.
+
+### CI Pipeline
+
+Add a GitHub Actions workflow (`.github/workflows/ci.yml`) that automatically runs `dotnet build` and `dotnet test` on every push and pull request, ensuring the test suite is always green before code is merged.
+
+```yaml
+# .github/workflows/ci.yml (planned)
+on: [push, pull_request]
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with: { dotnet-version: '8.x' }
+      - run: dotnet test PizzaTopping.Tests/PizzaTopping.Tests.csproj
+```
+
+### `--heatmap` — Topping Co-occurrence Matrix
+
+Print a full N×N ASCII grid showing how often every pair of toppings appears together. Rows and columns are topping names; each cell shows the co-occurrence count. Useful for spotting affinity clusters across the entire menu at a glance.
+
+```
+           | bacon | cheese | mushrooms | pepperoni | ...
+-----------+-------+--------+-----------+-----------+----
+bacon      |   —   |   876  |    412    |    791    | ...
+cheese     |  876  |   —    |    854    |   1423    | ...
+mushrooms  |  412  |   854  |    —      |    987    | ...
+pepperoni  |  791  |  1423  |    987    |    —      | ...
+```
+
+### `--watch` — Live File Watcher
+
+Monitor a local JSON file with `FileSystemWatcher` and automatically re-run the analysis whenever the file is saved. Useful for live dashboards during a shift — drop updated order data into the file and the terminal refreshes instantly without restarting the process.
+
+```bash
+# Terminal clears and re-renders every time orders.json is saved
+dotnet run --project PizzaTopping -- --file orders.json --watch --chart --top 10
 ```
